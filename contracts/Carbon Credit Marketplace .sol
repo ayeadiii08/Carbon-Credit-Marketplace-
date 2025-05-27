@@ -9,7 +9,7 @@ contract CarbonCreditMarketplace {
         uint256 pricePerTon; // Price in wei per ton
         address seller;
         bool isActive;
-        string verificationHash; // IPFS hash for verification documents
+        string verificationHash; //PFS hash for verification documents
         uint256 vintage; // Year of carbon credit generation
         uint256 timestamp;
     }
