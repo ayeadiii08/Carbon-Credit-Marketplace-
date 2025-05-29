@@ -14,7 +14,7 @@ contract CarbonCreditMarketplace {
         uint256 timestamp;
     }
 
-    struct Purchase {
+    struct Purchase 
         uint256 creditId;
         address buyer;
         uint256 amount;
