@@ -4,7 +4,7 @@ pragma solidity ^0.8.19
 contract CarbonCreditMarketplace {
     struct CarbonCredit {
         uint256 id;
-        string projectName;
+        string projectNa
         uint256 amount; // Amount in tons of CO2
         uint256 pricePerTon; // Price in wei per ton
         address seller;
