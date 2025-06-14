@@ -13,6 +13,17 @@ contract CarbonCreditMarketplace {
         uint256 vintage; // Year of carbon credit generation
         uint256 timestamp;
     }
+ontract CarbonCreditMarketplace {
+    struct CarbonCredit {
+        uint256 id;
+        string projectNa
+        uint256 amount; // Amount in tons of CO2
+        uint256 pricePerTon; // Price in wei per ton
+        address seller;
+        bool isActive;
+        string sh; //PFS hash for verification documents
+        uint256 vintage; // Year of carbon credit generation
+        uint256 timestamp;
 
     struct Purchase 
         uint256 creditId;
