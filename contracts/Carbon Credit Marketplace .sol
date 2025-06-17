@@ -10,7 +10,7 @@ contract CarbonCreditMarketplace {
         uint256 vintage; // Year of carbon credit generation
         uint256 timestamp;
     }
-ontract CarbonCreditMarketplace {
+ontract CarbonCreditMarket
     struct CarbonCredit {
         uint256 id;
         string projectNa
