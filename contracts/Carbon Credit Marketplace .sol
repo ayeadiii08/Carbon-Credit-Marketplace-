@@ -6,7 +6,7 @@ contract CarbonCreditMarketplace {
         uint256 id;
         string projectN
         bool isActive;
-        string sh; //PFS hash for verification documents
+        string sh; //PFS hash for verification 
         uint256 vintage; // Year of carbon credit generation
         uint256 timestamp;
     }
