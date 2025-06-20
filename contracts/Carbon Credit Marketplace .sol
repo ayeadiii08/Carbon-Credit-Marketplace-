@@ -67,13 +67,6 @@ contract CarbonCreditMarketplace {
     modifier validCredit(uint256 _creditId) {
         require(_creditId > 0 && _creditId < nextCreditId, "Invalid credit ID");
         require(carbonCredits[_creditId].isActive, "Credit not active");
-        _;
-    }
-
-    modifier nonZeroAmount(uint256 _amount) {
-        require(_amount > 0, "Amount must be greater than 0");
-        _;
-    }
 
     // Core Function 1: List Carbon Credits for Sale
     function listCarbonCredit(
