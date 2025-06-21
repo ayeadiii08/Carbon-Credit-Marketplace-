@@ -115,13 +115,7 @@ contract CarbonCreditMarketplace {
         require(msg.sender != credit.seller, "Cannot buy your own credits");
         
         uint256 totalPrice = _amount * credit.pricePerTon;
-        require(msg.value >= totalPrice, "Insufficient payment");
 
-        // Update credit amount
-        credit.amount -= _amount;
-        if (credit.amount == 0) {
-            credit.isActive = false;
-        }
 
         // Record purchase
         creditPurchases[_creditId].push(Purchase({
