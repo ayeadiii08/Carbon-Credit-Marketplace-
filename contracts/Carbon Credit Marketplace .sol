@@ -1,22 +1,20 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.19
+pragma solidity ^0.8.19;
 
 contract CarbonCreditMarketplace {
     struct CarbonCredit {
         uint256 id;
-        string projectN
+        string projectName;
+        uint256 amount;
+        uint256 pricePerTon;
+        address seller;
         bool isActive;
-        string sh; //PFS hash for verification 
-        uint256 vintage; // Year of carbon credit generation
+        string verificationHash;
+        uint256 vintage;
         uint256 timestamp;
     }
 
-        bool isActive;
-        string sh; //PFS hash for verification documents
-        uint256 vintage; // Year of carbon credit generation
-        uint256 timestamp;
-
-    struct Purchase 
+    struct Purchase {
         uint256 creditId;
         address buyer;
         uint256 amount;
@@ -28,12 +26,12 @@ contract CarbonCreditMarketplace {
     mapping(uint256 => Purchase[]) public creditPurchases;
     mapping(address => uint256[]) public userCredits;
     mapping(address => uint256) public userBalances; // Track retired credits
-    
+
     uint256 public nextCreditId = 1;
     uint256 public totalCreditsListed;
     uint256 public totalCreditsSold;
     uint256 public totalCreditsRetired;
-    
+
     event CreditListed(
         uint256 indexed creditId,
         string projectName,
@@ -42,7 +40,7 @@ contract CarbonCreditMarketplace {
         address indexed seller,
         uint256 vintage
     );
-    
+
     event CreditPurchased(
         uint256 indexed creditId,
         address indexed buyer,
@@ -50,7 +48,7 @@ contract CarbonCreditMarketplace {
         uint256 totalPrice,
         uint256 timestamp
     );
-    
+
     event CreditRetired(
         uint256 indexed creditId,
         address indexed buyer,
@@ -58,17 +56,17 @@ contract CarbonCreditMarketplace {
         uint256 timestamp
     );
 
-    modifier onlyActiveCreditSeller(uint256 _creditId) {
-        require(carbonCredits[_creditId].seller == msg.sender, "Not the seller");
-        require(carbonCredits[_creditId].isActive, "Credit not active");
+    modifier nonZeroAmount(uint256 _amount) {
+        require(_amount > 0, "Amount must be greater than zero");
         _;
     }
 
     modifier validCredit(uint256 _creditId) {
         require(_creditId > 0 && _creditId < nextCreditId, "Invalid credit ID");
         require(carbonCredits[_creditId].isActive, "Credit not active");
+        _;
+    }
 
-    // Core Function 1: List Carbon Credits for Sale
     function listCarbonCredit(
         string memory _projectName,
         uint256 _amount,
@@ -82,7 +80,7 @@ contract CarbonCreditMarketplace {
         require(_vintage >= 2000 && _vintage <= getCurrentYear(), "Invalid vintage year");
 
         uint256 creditId = nextCreditId++;
-        
+
         carbonCredits[creditId] = CarbonCredit({
             id: creditId,
             projectName: _projectName,
@@ -99,11 +97,10 @@ contract CarbonCreditMarketplace {
         totalCreditsListed += _amount;
 
         emit CreditListed(creditId, _projectName, _amount, _pricePerTon, msg.sender, _vintage);
-        
+
         return creditId;
     }
 
-    // Core Function 2: Purchase Carbon Credits
     function purchaseCarbonCredit(uint256 _creditId, uint256 _amount) 
         external 
         payable 
@@ -113,11 +110,15 @@ contract CarbonCreditMarketplace {
         CarbonCredit storage credit = carbonCredits[_creditId];
         require(_amount <= credit.amount, "Insufficient credits available");
         require(msg.sender != credit.seller, "Cannot buy your own credits");
-        
+
         uint256 totalPrice = _amount * credit.pricePerTon;
+        require(msg.value >= totalPrice, "Insufficient payment");
 
+        credit.amount -= _amount;
+        if (credit.amount == 0) {
+            credit.isActive = false;
+        }
 
-        // Record purchase
         creditPurchases[_creditId].push(Purchase({
             creditId: _creditId,
             buyer: msg.sender,
@@ -128,14 +129,10 @@ contract CarbonCreditMarketplace {
 
         totalCreditsSold += _amount;
 
-        // Transfer payment to seller (90% to seller, 10% as platform fee)
-        uint256 platformFee = totalPrice / 10; // 10% fee
+        uint256 platformFee = totalPrice / 10;
         uint256 sellerAmount = totalPrice - platformFee;
-        
-        payable(credit.seller).transfer(sellerAmount);
-        // Platform fee stays in contract for now
 
-        // Refund excess payment
+        payable(credit.seller).transfer(sellerAmount);
         if (msg.value > totalPrice) {
             payable(msg.sender).transfer(msg.value - totalPrice);
         }
@@ -143,33 +140,29 @@ contract CarbonCreditMarketplace {
         emit CreditPurchased(_creditId, msg.sender, _amount, totalPrice, block.timestamp);
     }
 
-    // Core Function 3: Retire Carbon Credits (for offsetting)
     function retireCarbonCredit(uint256 _creditId, uint256 _amount) 
         external 
         nonZeroAmount(_amount)
     {
         require(_creditId > 0 && _creditId < nextCreditId, "Invalid credit ID");
-        
-        // Check if user has purchased this credit
+
         Purchase[] memory purchases = creditPurchases[_creditId];
         uint256 userPurchased = 0;
-        
+
         for (uint256 i = 0; i < purchases.length; i++) {
             if (purchases[i].buyer == msg.sender) {
                 userPurchased += purchases[i].amount;
             }
         }
-        
+
         require(userPurchased >= _amount, "Insufficient credit balance");
-        
-        // Update user's retired credits balance
+
         userBalances[msg.sender] += _amount;
         totalCreditsRetired += _amount;
-        
+
         emit CreditRetired(_creditId, msg.sender, _amount, block.timestamp);
     }
 
-    // View Functions
     function getCarbonCredit(uint256 _creditId) 
         external 
         view 
@@ -218,53 +211,49 @@ contract CarbonCreditMarketplace {
         returns (CarbonCredit[] memory) 
     {
         uint256 activeCount = 0;
-        
-        // Count active credits
+
         for (uint256 i = 1; i < nextCreditId; i++) {
             if (carbonCredits[i].isActive) {
                 activeCount++;
             }
         }
-        
-        // Create array of active credits
+
         CarbonCredit[] memory activeCredits = new CarbonCredit[](activeCount);
         uint256 currentIndex = 0;
-        
+
         for (uint256 i = 1; i < nextCreditId; i++) {
             if (carbonCredits[i].isActive) {
                 activeCredits[currentIndex] = carbonCredits[i];
                 currentIndex++;
             }
         }
-        
+
         return activeCredits;
     }
 
-    // Helper function to get current year
     function getCurrentYear() private view returns (uint256) {
         return 1970 + (block.timestamp / 365 days);
     }
 
-    // Emergency functions (for contract owner)
     address public owner;
-    
+
     constructor() {
         owner = msg.sender;
     }
-    
+
     modifier onlyOwner() {
         require(msg.sender == owner, "Only owner can call this function");
         _;
     }
-    
+
     function withdrawPlatformFees() external onlyOwner {
         uint256 balance = address(this).balance;
         require(balance > 0, "No fees to withdraw");
         payable(owner).transfer(balance);
     }
-    
+
     function updateOwner(address _newOwner) external onlyOwner {
         require(_newOwner != address(0), "Invalid address");
         owner = _newOwner;
     }
-} 
+}
