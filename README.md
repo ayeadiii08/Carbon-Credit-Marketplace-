@@ -88,7 +88,6 @@ We believe that by democratizing access to carbon markets and making environment
 - **Automated Offsetting**: Smart contracts that automatically purchase and retire credits based on user activity
 -
 
-contract :0xDaC60d1C36EA85781FFbe4251852Bb7F4
+contract :0xDaC60d1C36EA85781FFbe4251852Bb7F4E1cAa71
 ![Screenshot 2025-05-22 135333](https://github.com/user-attachments/assets/2ff13769-93c3-4241-b9c9-37f76da21fba)
-E1cAa71
 
