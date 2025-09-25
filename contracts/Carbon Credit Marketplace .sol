@@ -1,96 +1,55 @@
-mapping(uint256 => address) public originalSeller;
+function resolveEscrow(uint256 _escrowId, bool releaseToSeller) external onlyOwner {
+    Escrow storage esc = escrows[_escrowId];
+    require(!esc.sellerConfirmed || !esc.buyerConfirmed, "Already confirmed");
 
-function listCarbonCredit(
-    string memory _projectName,
-    uint256 _amount,
-    uint256 _pricePerTon,
-    string memory _verificationHash,
-    uint256 _vintage
-) external nonZeroAmount(_amount) returns (uint256) {
-    ...
-    carbonCredits[creditId] = CarbonCredit({
-        ...
-    });
-    originalSeller[creditId] = msg.sender; // track first seller
-    ...
-}
-uint256 royalty = (totalPrice * 2) / 100; 
-payable(originalSeller[_creditId]).transfer(royalty);
-sellerAmount -= royalty;
-bool public paused;
-
-modifier notPaused() {
-    require(!paused, "Marketplace is paused");
-    _;
-}
-
-function setPause(bool _state) external onlyOwner {
-    paused = _state;
-}
-struct Escrow {
-    uint256 creditId;
-    address buyer;
-    uint256 amount;
-    uint256 totalPrice;
-    bool sellerConfirmed;
-    bool buyerConfirmed;
-}
-
-mapping(uint256 => Escrow) public escrows;
-uint256 public nextEscrowId;
-
-function initiateEscrow(uint256 _creditId, uint256 _amount) 
-    external 
-    payable 
-    validCredit(_creditId) 
-    nonZeroAmount(_amount) 
-    notPaused 
-{
-    CarbonCredit storage credit = carbonCredits[_creditId];
-    uint256 totalPrice = _amount * credit.pricePerTon;
-    require(msg.value >= totalPrice, "Insufficient payment");
-
-    uint256 escrowId = nextEscrowId++;
-    escrows[escrowId] = Escrow(_creditId, msg.sender, _amount, totalPrice, false, false);
-}
-mapping(address => uint256) public sellerRatings;
-mapping(address => uint256) public ratingCounts;
-
-function rateSeller(address _seller, uint8 _rating) external {
-    require(_rating >= 1 && _rating <= 5, "Invalid rating");
-    sellerRatings[_seller] += _rating;
-    ratingCounts[_seller]++;
-}
-
-function getSellerReputation(address _seller) external view returns (uint256 avgRating) {
-    if (ratingCounts[_seller] == 0) return 0;
-    return sellerRatings[_seller] / ratingCounts[_seller];
-}
-function retireBatch(uint256[] calldata _creditIds, uint256[] calldata _amounts) external {
-    require(_creditIds.length == _amounts.length, "Mismatched input");
-
-    for (uint256 i = 0; i < _creditIds.length; i++) {
-        retireCarbonCredit(_creditIds[i], _amounts[i]);
+    if (releaseToSeller) {
+        payable(carbonCredits[esc.creditId].seller).transfer(esc.totalPrice);
+    } else {
+        payable(esc.buyer).transfer(esc.totalPrice);
     }
+    delete escrows[_escrowId];
 }
-mapping(address => bool) public whitelisted;
+uint256 public royaltyFee = 2; // default 2%
 
-function updateWhitelist(address _user, bool _status) external onlyOwner {
-    whitelisted[_user] = _status;
+function setRoyaltyFee(uint256 _fee) external onlyOwner {
+    require(_fee <= 10, "Max 10%");
+    royaltyFee = _fee;
+}
+vmapping(uint256 => bool) public verifiedCredits;
+
+function verifyCredit(uint256 _creditId, bool _status) external onlyOwner {
+    verifiedCredits[_creditId] = _status;
 }
 
-modifier onlyWhitelisted() {
-    require(whitelisted[msg.sender], "Not KYC verified");
+modifier onlyVerified(uint256 _creditId) {
+    require(verifiedCredits[_creditId], "Credit not verified");
     _;
 }
+uint256 public marketplaceFee = 1; // 1%
 
-
-
-
-
-
-
-
-
-
-
+function setMarketplaceFee(uint256 _fee) external onlyOwner {
+    require(_fee <= 5, "Max 5%");
+    marketplaceFee = _fee;
+}
+uint256 fee = (totalPrice * marketplaceFee) / 100;
+payable(owner()).transfer(fee);
+sellerAmount -= fee;
+function calculateFee(address _seller, uint256 _price) public view returns (uint256) {
+    uint256 avgRating = ratingCounts[_seller] == 0 
+        ? 0 
+        : sellerRatings[_seller] / ratingCounts[_seller];
+    
+    if (avgRating >= 4) {
+        return (_price * (marketplaceFee / 2)) / 100; // 50% discount
+    }
+    return (_price * marketplaceFee) / 100;
+}
+event CarbonListed(uint256 indexed creditId, address indexed seller, uint256 amount, uint256 price);
+event EscrowInitiated(uint256 indexed escrowId, uint256 creditId, address buyer, uint256 totalPrice);
+event SellerRated(address indexed seller, uint8 rating);
+event CreditRetired(uint256 indexed creditId, uint256 amount, address retiredBy);
+function calculateBulkPrice(uint256 _amount, uint256 _pricePerTon) public pure returns (uint256) {
+    if (_amount >= 100) return (_amount * _pricePerTon * 90) / 100; // 10% discount
+    if (_amount >= 50) return (_amount * _pricePerTon * 95) / 100;  // 5% discount
+    return _amount * _pricePerTon;
+}
