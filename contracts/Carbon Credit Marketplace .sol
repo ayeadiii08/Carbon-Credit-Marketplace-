@@ -1,55 +1,112 @@
-function resolveEscrow(uint256 _escrowId, bool releaseToSeller) external onlyOwner {
+struct Dispute {
+    uint256 escrowId;
+    address raiser;
+    string reason;
+    bool resolved;
+    bool ruledInFavorOfSeller;
+}
+
+mapping(uint256 => Dispute) public disputes;
+
+event DisputeRaised(uint256 indexed escrowId, address indexed raiser, string reason);
+event DisputeResolved(uint256 indexed escrowId, bool ruledInFavorOfSeller);
+
+function raiseDispute(uint256 _escrowId, string memory _reason) external {
     Escrow storage esc = escrows[_escrowId];
+    require(msg.sender == esc.buyer || msg.sender == carbonCredits[esc.creditId].seller, "Not involved");
     require(!esc.sellerConfirmed || !esc.buyerConfirmed, "Already confirmed");
-
-    if (releaseToSeller) {
-        payable(carbonCredits[esc.creditId].seller).transfer(esc.totalPrice);
-    } else {
-        payable(esc.buyer).transfer(esc.totalPrice);
-    }
-    delete escrows[_escrowId];
-}
-uint256 public royaltyFee = 2; // default 2%
-
-function setRoyaltyFee(uint256 _fee) external onlyOwner {
-    require(_fee <= 10, "Max 10%");
-    royaltyFee = _fee;
-}
-vmapping(uint256 => bool) public verifiedCredits;
-
-function verifyCredit(uint256 _creditId, bool _status) external onlyOwner {
-    verifiedCredits[_creditId] = _status;
+    disputes[_escrowId] = Dispute(_escrowId, msg.sender, _reason, false, false);
+    emit DisputeRaised(_escrowId, msg.sender, _reason);
 }
 
-modifier onlyVerified(uint256 _creditId) {
-    require(verifiedCredits[_creditId], "Credit not verified");
-    _;
+function resolveDispute(uint256 _escrowId, bool favorSeller) external onlyOwner {
+    Dispute storage disp = disputes[_escrowId];
+    require(!disp.resolved, "Already resolved");
+    disp.resolved = true;
+    disp.ruledInFavorOfSeller = favorSeller;
+    resolveEscrow(_escrowId, favorSeller);
+    emit DisputeResolved(_escrowId, favorSeller);
 }
-uint256 public marketplaceFee = 1; // 1%
+mapping(address => uint256) public sellerTiers; // 0=Basic,1=Silver,2=Gold
 
-function setMarketplaceFee(uint256 _fee) external onlyOwner {
-    require(_fee <= 5, "Max 5%");
-    marketplaceFee = _fee;
-}
-uint256 fee = (totalPrice * marketplaceFee) / 100;
-payable(owner()).transfer(fee);
-sellerAmount -= fee;
-function calculateFee(address _seller, uint256 _price) public view returns (uint256) {
+function updateSellerTier(address _seller) public {
     uint256 avgRating = ratingCounts[_seller] == 0 
         ? 0 
         : sellerRatings[_seller] / ratingCounts[_seller];
-    
-    if (avgRating >= 4) {
-        return (_price * (marketplaceFee / 2)) / 100; // 50% discount
-    }
-    return (_price * marketplaceFee) / 100;
+    if (avgRating >= 4 && ratingCounts[_seller] >= 10) sellerTiers[_seller] = 2;
+    else if (avgRating >= 3) sellerTiers[_seller] = 1;
+    else sellerTiers[_seller] = 0;
 }
-event CarbonListed(uint256 indexed creditId, address indexed seller, uint256 amount, uint256 price);
-event EscrowInitiated(uint256 indexed escrowId, uint256 creditId, address buyer, uint256 totalPrice);
-event SellerRated(address indexed seller, uint8 rating);
-event CreditRetired(uint256 indexed creditId, uint256 amount, address retiredBy);
-function calculateBulkPrice(uint256 _amount, uint256 _pricePerTon) public pure returns (uint256) {
-    if (_amount >= 100) return (_amount * _pricePerTon * 90) / 100; // 10% discount
-    if (_amount >= 50) return (_amount * _pricePerTon * 95) / 100;  // 5% discount
-    return _amount * _pricePerTon;
+
+function getTierDiscount(address _seller) public view returns (uint256) {
+    if (sellerTiers[_seller] == 2) return 80; // 20% discount on fee
+    if (sellerTiers[_seller] == 1) return 90; // 10% discount
+    return 100; // no discount
+}
+function retireCredit(uint256 _creditId, uint256 _amount) external onlyVerified(_creditId) {
+    CarbonCredit storage credit = carbonCredits[_creditId];
+    require(_amount <= credit.amount, "Not enough credits");
+    credit.amount -= _amount;
+    emit CreditRetired(_creditId, _amount, msg.sender);
+}
+address public sustainabilityFund;
+
+function setSustainabilityFund(address _fund) external onlyOwner {
+    sustainabilityFund = _fund;
+}
+
+function distributeFee(uint256 totalFee) internal {
+    uint256 devShare = (totalFee * 60) / 100;
+    uint256 fundShare = totalFee - devShare;
+    payable(owner()).transfer(devShare);
+    if (sustainabilityFund != address(0)) payable(sustainabilityFund).transfer(fundShare);
+}
+distributeFee(fee);
+struct Transaction {
+    uint256 escrowId;
+    uint256 creditId;
+    address buyer;
+    address seller;
+    uint256 amount;
+    uint256 totalPrice;
+    uint256 timestamp;
+}
+
+Transaction[] public transactions;
+
+event TransactionLogged(uint256 indexed escrowId, address indexed buyer, address indexed seller, uint256 totalPrice);
+
+function logTransaction(
+    uint256 _escrowId,
+    uint256 _creditId,
+    address _buyer,
+    address _seller,
+    uint256 _amount,
+    uint256 _totalPrice
+) internal {
+    transactions.push(Transaction(_escrowId, _creditId, _buyer, _seller, _amount, _totalPrice, block.timestamp));
+    emit TransactionLogged(_escrowId, _buyer, _seller, _totalPrice);
+}
+mapping(address => uint256) public loyaltyPoints;
+
+function rewardUser(address _user, uint256 _points) internal {
+    loyaltyPoints[_user] += _points;
+}
+
+function redeemPoints(uint256 _points) external {
+    require(loyaltyPoints[msg.sender] >= _points, "Not enough points");
+    loyaltyPoints[msg.sender] -= _points;
+    // could later mint NFT, token, or discount
+}
+uint256 public escrowTimeLimit = 3 days;
+
+function autoRelease(uint256 _escrowId) external {
+    Escrow storage esc = escrows[_escrowId];
+    require(block.timestamp > esc.createdAt + escrowTimeLimit, "Too early");
+    resolveEscrow(_escrowId, true);
+}
+mapping(address => bool) public verifiedSellers;
+
+function verifySeller(address _seller, bool _status) external onlyOwner {
+    verifiedSellers[_seller] = _status;
 }
