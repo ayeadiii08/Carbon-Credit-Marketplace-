@@ -1,116 +1,120 @@
-mapping(uint256 => bool) public buyerConfirmed;
-mapping(uint256 => bool) public sellerConfirmed;
+interface IPriceFeed {
+    function latestAnswer() external view returns (int256);
+}
 
-event TradeConfirmed(uint256 escrowId, address confirmer);
+IPriceFeed public carbonPriceFeed;
 
-function confirmTrade(uint256 _escrowId) external {
+function setCarbonPriceFeed(address _feed) external onlyOwner {
+    carbonPriceFeed = IPriceFeed(_feed);
+}
+
+function getLiveCarbonPrice() public view returns (uint256) {
+    int256 price = carbonPriceFeed.latestAnswer();
+    require(price > 0, "Invalid oracle data");
+    return uint256(price);
+}
+address public stakingPool;
+address public rewardPool;
+
+function setFeeRecipients(address _staking, address _reward) external onlyOwner {
+    stakingPool = _staking;
+    rewardPool = _reward;
+}
+
+function splitFees(uint256 _amount) internal {
+    uint256 daoShare = (_amount * 60) / 100;
+    uint256 stakeShare = (_amount * 25) / 100;
+    uint256 rewardShare = _amount - daoShare - stakeShare;
+    payable(treasury).transfer(daoShare);
+    payable(stakingPool).transfer(stakeShare);
+    payable(rewardPool).transfer(rewardShare);
+}
+mapping(address => uint256) public votesCast;
+
+function vote(uint256 _id, bool support) external {
+    Proposal storage p = proposals[_id];
+    require(block.timestamp < p.endTime, "Voting ended");
+    uint256 votes = govToken.balanceOf(msg.sender);
+    require(votes > 0, "No voting power");
+
+    if (support) p.votesFor += votes;
+    else p.votesAgainst += votes;
+
+    votesCast[msg.sender] += 1;
+    loyaltyPoints[msg.sender] += 10; // bonus
+    logAction("DAO Vote Cast");
+}
+mapping(address => string) public achievementTitle;
+
+function updateTitle(address _user) internal {
+    if (totalRetiredCredits[_user] >= 10000)
+        achievementTitle[_user] = "Eco-Legend";
+    else if (totalRetiredCredits[_user] >= 5000)
+        achievementTitle[_user] = "Carbon Hero";
+    else if (totalRetiredCredits[_user] >= 1000)
+        achievementTitle[_user] = "Eco Supporter";
+}
+mapping(bytes32 => bool) public usedIdentityHash;
+
+function registerUser(bytes32 _identityHash) external {
+    require(!usedIdentityHash[_identityHash], "Identity already used");
+    usedIdentityHash[_identityHash] = true;
+    logAction("User Registered");
+}
+mapping(uint256 => bool) public disputeResolved;
+
+function resolveDispute(uint256 _escrowId, bool favorSeller) external onlyOwner {
     Escrow storage esc = escrows[_escrowId];
-    require(!esc.cancelled && !esc.completed, "Escrow closed");
-    require(msg.sender == esc.buyer || msg.sender == esc.seller, "Not a participant");
+    require(!disputeResolved[_escrowId], "Already resolved");
+    disputeResolved[_escrowId] = true;
 
-    if (msg.sender == esc.buyer) buyerConfirmed[_escrowId] = true;
-    if (msg.sender == esc.seller) sellerConfirmed[_escrowId] = true;
+    if (favorSeller) payable(esc.seller).transfer(esc.amount);
+    else payable(esc.buyer).transfer(esc.amount);
 
-    if (buyerConfirmed[_escrowId] && sellerConfirmed[_escrowId]) {
-        esc.completed = true;
-        payable(esc.seller).transfer(esc.amount);
-        updateReputation(esc.seller, true);
-        updateReputation(esc.buyer, true);
-        logAction("Trade Completed");
-    }
-
-    emit TradeConfirmed(_escrowId, msg.sender);
+    logAction("Dispute Resolved");
 }
-event AirdropClaimed(address indexed user, uint256 amount);
+event LeaderboardReward(address indexed user, uint256 reward);
 
-function randomAirdrop(address _user) internal {
-    uint256 random = uint256(keccak256(abi.encodePacked(block.timestamp, _user))) % 100;
-    if (random < 10) { // 10% chance
-        uint256 reward = 25 + (random % 25);
-        loyaltyPoints[_user] += reward;
-        emit AirdropClaimed(_user, reward);
+function rewardTopContributors() external onlyOwner {
+    require(leaderboard.length > 3, "Not enough users");
+    for (uint256 i = 0; i < 3; i++) {
+        address top = leaderboard[i];
+        rewardUser(top, (3 - i) * 100); // 1st:300, 2nd:200, 3rd:100
+        emit LeaderboardReward(top, (3 - i) * 100);
     }
 }
-enum VerificationLevel { Unverified, Basic, Advanced, Institutional }
-mapping(address => VerificationLevel) public verificationLevel;
+mapping(address => uint256) public stakedAmount;
 
-event UserVerified(address indexed user, VerificationLevel level);
-
-function verifyUser(address _user, VerificationLevel _level) external onlyOwner {
-    verificationLevel[_user] = _level;
-    emit UserVerified(_user, _level);
-}
-modifier onlyAdvanced(address _user) {
-    require(uint(verificationLevel[_user]) >= uint(VerificationLevel.Advanced), "Not verified enough");
-    _;
-}
-struct Feedback {
-    uint8 rating; // 1–5 stars
-    string comment;
+function stake() external payable {
+    require(msg.value > 0, "No value");
+    stakedAmount[msg.sender] += msg.value;
+    loyaltyPoints[msg.sender] += msg.value / 1e15; // e.g. +1 LP per 0.001 ETH
+    logAction("Tokens Staked");
 }
 
-mapping(address => Feedback[]) public feedbacks;
-
-function leaveFeedback(address _to, uint8 _rating, string calldata _comment) external {
-    require(_rating >= 1 && _rating <= 5, "Invalid rating");
-    feedbacks[_to].push(Feedback(_rating, _comment));
-    logAction("Feedback Submitted");
+function unstake(uint256 _amount) external {
+    require(stakedAmount[msg.sender] >= _amount, "Insufficient stake");
+    stakedAmount[msg.sender] -= _amount;
+    payable(msg.sender).transfer(_amount);
+    logAction("Tokens Unstaked");
 }
-IERC721 public membershipNFT;
+event CrossChainTransfer(address indexed user, uint256 creditId, uint256 amount, string targetChain);
 
-function setMembershipNFT(address _nft) external onlyOwner {
-    membershipNFT = IERC721(_nft);
+function bridgeCredit(uint256 _creditId, uint256 _amount, string calldata _targetChain) external {
+    CarbonCredit storage credit = carbonCredits[_creditId];
+    require(_amount <= credit.amount, "Insufficient credits");
+    credit.amount -= _amount;
+    emit CrossChainTransfer(msg.sender, _creditId, _amount, _targetChain);
 }
-
-function hasMembership(address _user) public view returns (bool) {
-    return membershipNFT.balanceOf(_user) > 0;
-}
-
-function getTierDiscount(address _seller) public view returns (uint256) {
-    if (hasMembership(_seller)) return 60; // extra 40% discount
-    Tier tier = userTier[_seller];
-    if (tier == Tier.Platinum) return 70;
-    if (tier == Tier.Gold) return 80;
-    if (tier == Tier.Silver) return 90;
-    return 100;
-}
-function decayTier(address _user) internal {
-    if (block.timestamp > lastActivity[_user] + 90 days) {
-        if (userTier[_user] == Tier.Platinum) userTier[_user] = Tier.Gold;
-        else if (userTier[_user] == Tier.Gold) userTier[_user] = Tier.Silver;
-        else if (userTier[_user] == Tier.Silver) userTier[_user] = Tier.Bronze;
+function adaptiveReward(address _user) internal {
+    uint256 avgScore;
+    uint256 totalUsers = leaderboard.length;
+    for (uint256 i = 0; i < totalUsers; i++) {
+        avgScore += getReputationScore(leaderboard[i]);
     }
-}
-address[] public leaderboard;
+    if (totalUsers > 0) avgScore /= totalUsers;
 
-function updateLeaderboard(address _user) internal {
-    if (leaderboard.length < 10) leaderboard.push(_user);
-    else {
-        // Replace lowest scorer
-        uint256 lowestScore;
-        uint256 index;
-        for (uint256 i = 0; i < leaderboard.length; i++) {
-            uint256 score = getReputationScore(leaderboard[i]);
-            if (score < lowestScore) {
-                lowestScore = score;
-                index = i;
-            }
-        }
-        if (getReputationScore(_user) > lowestScore) {
-            leaderboard[index] = _user;
-        }
-    }
-}
-address public treasury;
-uint256 public burnPercentage = 5; // 5%
-
-function setTreasury(address _treasury) external onlyOwner {
-    treasury = _treasury;
-}
-
-function distributeFee(uint256 _amount) internal {
-    uint256 burnAmount = (_amount * burnPercentage) / 100;
-    uint256 treasuryAmount = _amount - burnAmount;
-    payable(treasury).transfer(treasuryAmount);
-    // optional: burn tokens here if ERC20
+    uint256 userScore = getReputationScore(_user);
+    if (userScore >= avgScore) rewardUser(_user, 30);
+    else rewardUser(_user, 10);
 }
