@@ -1,177 +1,131 @@
-// import "openzeppelin-contracts/contracts/security/ReentrancyGuard.sol";
-contract CarbonMarketplace is ReentrancyGuard {
-    // then mark external functions that transfer ETH/tokens:
-    function confirmTrade(uint256 _escrowId) external nonReentrant {
-        // ... existing logic
-    }
+// import "openzeppelin-contracts/contracts/access/AccessControl.sol";
+bytes32 public constant ADMIN_ROLE = keccak256("ADMIN_ROLE");
+bytes32 public constant KEEPER_ROLE = keccak256("KEEPER_ROLE");
+bytes32 public constant ARBITER_ROLE = keccak256("ARBITER_ROLE");
 
-    function unstake(uint256 _amount) external nonReentrant {
-        // ... existing logic
-    }
-}
-// import "openzeppelin-contracts/contracts/token/ERC20/IERC20.sol";
-function rescueERC20(address token, address to, uint256 amount) external onlyOwner {
-    require(token != address(rewardToken), "Cannot rescue reward token");
-    IERC20(token).transfer(to, amount);
-    logAction("ERC20 Rescued");
-}
-uint256 public treasuryUnlockTime;
-uint256 public pendingTreasuryAmount;
+// In initialize / constructor:
+_setupRole(DEFAULT_ADMIN_ROLE, msg.sender);
+_setupRole(ADMIN_ROLE, msg.sender);
 
-function proposeTreasuryWithdrawal(uint256 _amount) external onlyOwner {
-    pendingTreasuryAmount = _amount;
-    treasuryUnlockTime = block.timestamp + 3 days;
-    logAction("Treasury Withdrawal Proposed");
-}
-
-function executeTreasuryWithdrawal(address payable _to) external onlyOwner {
-    require(block.timestamp >= treasuryUnlockTime, "Timelock active");
-    uint256 amount = pendingTreasuryAmount;
-    pendingTreasuryAmount = 0;
-    treasuryUnlockTime = 0;
-    _to.transfer(amount);
-    logAction("Treasury Withdrawal Executed");
-}
-address[] public admins;
-mapping(bytes32 => mapping(address => bool)) public confirmations;
-mapping(bytes32 => uint256) public confirmCount;
-
-function submitAdminAction(bytes32 actionId) public onlyOwner {
-    // record submission (no-op here)
-}
-
-function confirmAdminAction(bytes32 actionId) public {
-    require(isAdmin(msg.sender), "Not admin");
-    require(!confirmations[actionId][msg.sender], "Already confirmed");
-    confirmations[actionId][msg.sender] = true;
-    confirmCount[actionId] += 1;
-    if (confirmCount[actionId] >= requiredAdminConfirmations()) {
-        // execute (owner will wire the executor)
-        logAction("Admin Action Executed");
-    }
-}
-
-function isAdmin(address a) internal view returns (bool) {
-    for(uint i; i<admins.length; i++) if (admins[i] == a) return true;
-    return false;
-}
-
-function requiredAdminConfirmations() public view returns (uint256) {
-    return (admins.length / 2) + 1;
-}
-mapping(uint256 => uint256) public disputeBond; // escrowId => amount
-uint256 public disputeBondAmount = 0.01 ether;
-
-function openDispute(uint256 _escrowId, string calldata reason) external payable {
-    require(msg.value == disputeBondAmount, "Incorrect bond");
-    disputeBond[_escrowId] = msg.value;
-    logAction("Dispute Opened");
-    // create dispute record...
-}
-
-function resolveAndSlash(uint256 _escrowId, address loser) internal onlyOwner {
-    uint256 bond = disputeBond[_escrowId];
-    disputeBond[_escrowId] = 0;
-    if (bond > 0) {
-        payable(treasury).transfer(bond);
-    }
-    // other resolution logic
-}
-// Very small skeleton — full EIP-712 needs domain/separator setup
-mapping(address => uint256) public nonces;
-
-function retireCreditWithSig(
-    uint256 _creditId,
-    uint256 _amount,
-    uint8 v, bytes32 r, bytes32 s
-) external {
-    bytes32 hash = keccak256(abi.encodePacked(msg.sender, _creditId, _amount, nonces[msg.sender]));
-    address signer = ecrecover(hash, v, r, s);
-    require(signer == msg.sender, "Invalid sig");
-    nonces[msg.sender]++;
-    retireCredit(_creditId, _amount); // uses existing logic
-}
-struct Plan { uint256 price; uint256 period; }
-mapping(uint256 => Plan) public plans;
-mapping(address => uint256) public subscriberExpiry;
-
-function subscribe(uint256 planId) external payable {
-    Plan memory p = plans[planId];
-    require(msg.value == p.price, "Wrong price");
-    if (subscriberExpiry[msg.sender] < block.timestamp) subscriberExpiry[msg.sender] = block.timestamp;
-    subscriberExpiry[msg.sender] += p.period;
-    logAction("Subscribed");
-}
-
-function isActiveSubscriber(address user) public view returns (bool) {
-    return subscriberExpiry[user] >= block.timestamp;
-}
-function batchRetire(uint256[] calldata ids, uint256[] calldata amounts) external {
-    require(ids.length == amounts.length, "Length mismatch");
-    for (uint i=0; i<ids.length; i++) {
-        retireCredit(ids[i], amounts[i]); // calls existing logic; ensure internal protections
-    }
-    logAction("Batch Retire Performed");
-}
-// import "openzeppelin-contracts/contracts/utils/cryptography/MerkleProof.sol";
-bytes32 public whitelistRoot;
-mapping(address => bool) public whitelistClaimed;
-
-function setWhitelistRoot(bytes32 root) external onlyOwner {
-    whitelistRoot = root;
-}
-
-function claimWhitelistDiscount(bytes32[] calldata proof) external {
-    require(!whitelistClaimed[msg.sender], "Already claimed");
-    bytes32 leaf = keccak256(abi.encodePacked(msg.sender));
-    require(MerkleProof.verify(proof, whitelistRoot, leaf), "Not whitelisted");
-    whitelistClaimed[msg.sender] = true;
-    loyaltyPoints[msg.sender] += 100; // example bonus
-    logAction("Whitelist Claimed");
-}
-address public trustedForwarder;
-
-function setTrustedForwarder(address _forwarder) external onlyOwner {
-    trustedForwarder = _forwarder;
-}
-
-function _msgSender() internal view returns (address sender) {
-    if (msg.sender == trustedForwarder) {
-        // the last 20 bytes of calldata is the real sender
-        assembly {
-            sender := shr(96, calldataload(sub(calldatasize(), 20)))
-        }
-    } else {
-        sender = msg.sender;
-    }
-}
-event Analytics(
-    address indexed user,
-    string indexed category,
-    string action,
-    uint256 value,
-    uint256 timestamp
-);
-
-function emitAnalytics(address user, string memory category, string memory action, uint256 value) internal {
-    emit Analytics(user, category, action, value, block.timestamp);
-}
-uint256 public contractVersion;
-bool private initialized;
-
-modifier initializer() {
-    require(!initialized, "Already initialized");
+modifier onlyAdmin() {
+    require(hasRole(ADMIN_ROLE, _msgSender()), "Not admin");
     _;
-    initialized = true;
+}
+// import "openzeppelin-contracts/contracts/token/ERC1155/ERC1155.sol";
+contract CarbonToken is ERC1155 {
+    constructor() ERC1155("ipfs://carbon/{id}.json") {}
+    function mint(address to, uint256 id, uint256 amount) external onlyAdmin {
+        _mint(to, id, amount, "");
+    }
+    function burn(address from, uint256 id, uint256 amount) external {
+        require(msg.sender == from || isApprovedForAll(from, msg.sender), "No permission");
+        _burn(from, id, amount);
+    }
+}
+struct Vest {
+    uint256 total;
+    uint256 released;
+    uint256 start;
+    uint256 duration;
+}
+mapping(address => Vest) public vestings;
+
+function createVesting(address to, uint256 amount, uint256 duration) internal {
+    vestings[to] = Vest(amount, 0, block.timestamp, duration);
+    // don't transfer here; transfer on claim
 }
 
-function initialize(address _treasury) external initializer {
-    treasury = _treasury;
-    contractVersion = 1;
-    logAction("Initialized");
+function claimVested() external {
+    Vest storage v = vestings[msg.sender];
+    uint256 vested = ((block.timestamp - v.start) * v.total) / v.duration;
+    if (vested > v.total) vested = v.total;
+    uint256 claimable = vested - v.released;
+    require(claimable > 0, "Nothing to claim");
+    v.released += claimable;
+    payable(msg.sender).transfer(claimable);
+    logAction("Vested Claimed");
+}
+mapping(address => address) public delegates;
+mapping(address => uint256) public delegatedVotes; // cached
+
+function delegate(address to) external {
+    delegates[msg.sender] = to;
+    // update delegatedVotes bookkeeping (simple version)
+    uint256 votes = govToken.balanceOf(msg.sender);
+    delegatedVotes[to] += votes;
+    logAction("Delegated");
+}
+// Keeper-compatible check / perform
+function checkUpkeep(bytes calldata) external view returns (bool upkeepNeeded, bytes memory) {
+    // Example: find any escrows past limit
+    upkeepNeeded = false;
+    // set true if maintenance needed
 }
 
-function bumpVersion() external onlyOwner {
-    contractVersion++;
-    logAction("Version Bumped");
+function performUpkeep(bytes calldata) external {
+    // only Keeper role or trusted forwarder allowed
+    // run autoCancelEscrow for stale escrows, decay inactive tiers, etc.
+}
+function executeTradeWithMax(uint256 escrowId, uint256 maxPrice) external {
+    uint256 livePrice = getLiveCarbonPrice();
+    require(livePrice <= maxPrice, "Slippage too high");
+    // proceed with trade
+}
+event RefundIssued(uint256 escrowId, uint256 amount, address to);
+
+function issuePartialRefund(uint256 _escrowId, uint256 _amount) external onlyAdmin nonReentrant {
+    Escrow storage esc = escrows[_escrowId];
+    require(esc.amount >= _amount, "Too much");
+    esc.amount -= _amount;
+    payable(esc.buyer).transfer(_amount);
+    emit RefundIssued(_escrowId, _amount, esc.buyer);
+    logAction("Partial Refund");
+}
+mapping(address => uint256) public lastEscrowCreated;
+uint256 public escrowCooldown = 1 hours;
+
+function createEscrow(...) external {
+    require(block.timestamp >= lastEscrowCreated[msg.sender] + escrowCooldown, "Cooldown");
+    lastEscrowCreated[msg.sender] = block.timestamp;
+    // create escrow...
+}
+event CreditProvenance(uint256 indexed creditId, string ipfsMetadata, uint256 timestamp);
+
+function registerCreditProvenance(uint256 creditId, string calldata ipfsHash) external onlyAdmin {
+    emit CreditProvenance(creditId, ipfsHash, block.timestamp);
+}
+interface IERC20Permit {
+    function permit(address owner, address spender, uint256 value, uint256 deadline, uint8 v, bytes32 r, bytes32 s) external;
+}
+
+function stakeWithPermit(address token, uint256 amount, uint256 deadline, uint8 v, bytes32 r, bytes32 s) external {
+    IERC20Permit(token).permit(msg.sender, address(this), amount, deadline, v, r, s);
+    IERC20(token).transferFrom(msg.sender, address(this), amount);
+    stakedAmount[msg.sender] += amount;
+    logAction("StakedWithPermit");
+}
+mapping(bytes32 => bool) public featurePaused; // e.g., keccak256("staking")
+
+modifier whenFeatureNotPaused(bytes32 feature) {
+    require(!featurePaused[feature], "Feature paused");
+    _;
+}
+
+function setFeaturePaused(bytes32 feature, bool state) external onlyAdmin {
+    featurePaused[feature] = state;
+    logAction("Feature Pause Toggled");
+}
+mapping(address => uint256) public fiatVoucher; // in stable token wei
+
+function issueFiatVoucher(address user, uint256 amount) external onlyAdmin {
+    fiatVoucher[user] += amount;
+    logAction("FiatVoucherIssued");
+}
+
+function claimFiatVoucher(address payable to, uint256 amount) external {
+    require(fiatVoucher[msg.sender] >= amount, "No voucher");
+    fiatVoucher[msg.sender] -= amount;
+    // off-chain: custodial partner picks this up, or transfer stable token if available
+    payable(to).transfer(amount);
+    logAction("FiatVoucherClaimed");
 }
