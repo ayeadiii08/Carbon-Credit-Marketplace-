@@ -1,38 +1,34 @@
-mapping(address => uint256) public flashLoanDebt;
+uint256 public flashFeeBps = 5; // 0.05% = 5 bps
+
 function flashLoan(uint256 amount) external nonReentrant {
     uint256 balanceBefore = carbonToken.balanceOf(address(this));
+    require(balanceBefore >= amount, "Insufficient liquidity");
     carbonToken.transfer(msg.sender, amount);
-    // user executes custom logic
-    require(carbonToken.balanceOf(address(this)) >= balanceBefore, "Loan not returned");
+
+    // call back hook: user must call `repayFlashLoan` in same tx (or handle via checks)
+    // After user logic, require balance restored + fee
+    uint256 required = amount + (amount * flashFeeBps) / 10000;
+    require(carbonToken.balanceOf(address(this)) >= balanceBefore + (required - amount), "Loan+fee not returned");
+
+    // credit fee to treasury or staking pool
+    uint256 fee = (amount * flashFeeBps) / 10000;
+    flashLoanDebt[msg.sender] += fee;
+    // optionally distribute fee immediately
+    // splitFees(fee);
 }
-struct Bundle {
-    uint256[] creditIds;
-    uint256[] amounts;
-    uint256 price;
-    bool active;
-}
-mapping(uint256 => Bundle) public bundles;
-function calculateStakingReward(address user) public view returns(uint256) {
-    uint256 base = stakedAmount[user];
-    uint256 tierMultiplier = uint256(userTier[user]) + 1; // Bronze=1, Silver=2
-    return base * tierMultiplier / 100; // e.g. 1-4% bonus
-}
-struct Auction { address seller; uint256 creditId; uint256 startPrice; uint256 highestBid; address highestBidder; uint256 endTime; bool active; }
-mapping(uint256 => Auction) public auctions;
-function recoverReputation(address user, uint256 ecoActionPoints) external {
-    completedTrades[user] += ecoActionPoints / 10;
-    updateTier(user);
-}
-struct Subscription { uint256 amountPerMonth; uint256 nextDue; bool active; }
-mapping(address => Subscription) public subscriptions;
-function paySubscription() external { ... }
-event CrossChainRetire(address user, uint256 creditId, uint256 amount, string targetChain);
-function dynamicMarketPrice(uint256 creditId) public view returns(uint256) {
-    uint256 base = listings[creditId].price;
-    uint256 marketFactor = getLiveCarbonPrice() / 1e8; // oracle-based
-    uint256 tierDiscount = 100 - getTierDiscount(msg.sender);
-    return (base * marketFactor * tierDiscount) / 10000;
-}
-function metaRetireCredit(uint256 creditId, uint256 amount, address user) external onlyRelayer {
-    retireCreditFor(user, creditId, amount);
+function buyBundle(uint256 bundleId) external payable nonReentrant {
+    Bundle storage b = bundles[bundleId];
+    require(b.active, "Inactive");
+    require(msg.value == b.price, "Wrong price");
+
+    b.active = false;
+    // transfer price minus donation/fees
+    uint256 afterDonation = donatePortion(msg.value);
+    splitFees(afterDonation);
+
+    // transfer ERC1155 tokens from contract to buyer (assumes bundle held by contract)
+    for (uint i = 0; i < b.creditIds.length; i++) {
+        carbonToken.safeTransferFrom(address(this), msg.sender, b.creditIds[i], b.amounts[i], "");
+    }
+    logAction("BundlePurchased");
 }
